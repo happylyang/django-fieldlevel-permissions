@@ -1,8 +1,12 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 from copy import deepcopy
 import re
 
+from functools import partial
 from django.contrib import admin
-
+from django.forms.models import modelformset_factory
+from django.contrib.admin.utils import flatten_fieldsets
 
 class FieldLevelAdmin(admin.ModelAdmin):
     """
@@ -11,69 +15,40 @@ class FieldLevelAdmin(admin.ModelAdmin):
     abstract base class replacement for ModelAdmin, with can_change_inline() and 
     can_change_field() customized to each use.
     """
-    
-    def get_fieldsets(self, request, obj=None):
+    def get_all_viewperms(self, request):
         """
-        Hook for specifying fieldsets for the add form, modified to only display 
-        fields inside fieldsets that the user has permission to view or change.
+        获取所有的view权限
         """
-        
-        # Get fieldsets from the ModeAdmin object
-        if self.declared_fieldsets:
-            fieldsets = self.declared_fieldsets
+        viewperms = tuple()
+        for perm in request.user.get_all_permissions():
+            if self.opts.app_label in perm and 'view' in perm:
+                short_cut = "_".join(".".join(perm.split('.')[1:]).split('_')[1:])
+                # 如果拥有查看全部的
+                if short_cut == "all":
+                    fields = self.model._meta.get_all_field_names()
+                    return tuple(fields)
+                else:
+                    viewperms += (short_cut,)
+        return viewperms
+
+    def get_readonly_fields(self,request, obj=None, origin=True):
+        all_view_permissions = self.get_all_viewperms(request) if not request.user.is_superuser else ()
+        return tuple(set(self.readonly_fields)|set(all_view_permissions))
+
+
+    def get_changelist_formset(self, request, **kwargs):
+        """
+        Returns a FormSet class for use on the changelist page if list_editable
+        is used.
+        """
+        defaults = {
+            "formfield_callback": partial(self.formfield_for_dbfield, request=request),
+        }
+        defaults.update(kwargs)
+        if 'fields' in defaults:
+            fields=defaults['fields']
+            del defaults['fields']
         else:
-            form = self.get_form(request, obj)
-            fieldsets = form.base_fields.keys() + \
-                list(self.get_readonly_fields(request, obj))
-        fieldsets = super(FieldLevelAdmin, self).get_fieldsets(request, obj=obj)
-        fieldsets = deepcopy(fieldsets)
-        
-        # Delete all fields in fieldsets that the request does not have
-        # permission to view
-        for fieldset in fieldsets:
-            fieldset[1]['fields'] = [field for field in fieldset[1]['fields'] \
-                if self.can_change_field(request, obj, field)]
-        
-        # Delete empty fieldsets
-        for fieldset in fieldsets:
-            if not fieldset[1]['fields']:
-                fieldsets.remove(fieldset)
-        
-        return fieldsets
-    
-    def get_form(self, request, obj=None):
-        """
-        Returns a Form class (used by add_view and change_view) modified to only 
-        include fields and inlines that the user has permissions to view.
-        """
-        form = super(FieldLevelAdmin, self).get_form(request, obj)
-        
-        # Remove the fields that the user does not have permission to view.
-        for field_name, field in form.base_fields.items():
-            if not self.can_change_field(request, obj, field_name):
-                del form.base_fields[field_name]
-        
-        # Because inlines live outside of the normal flow of fields (i.e. are
-        # not represented in self.base_fields), they need to be handled
-        # separately.
-        self.inline_instances = []
-        for inline_class in self.inlines:
-            if(self.can_change_inline(request, obj, inline_class.__name__)):
-                inline_instance = inline_class(self.model, self)
-                self.inline_instances.append(inline_instance)
-        
-        return form
-    
-    def can_change_inline(self, request, obj, inline_name):
-        """
-        Returns boolean indicating whether the user has necessary permissions to
-        view the passed inline.
-        """
-        return True
-    
-    def can_change_field(self, request, obj, field_name):
-        """
-        Returns boolean indicating whether the user has necessary permissions to
-        view the passed field.
-        """
-        return True
+            fields=self.list_editable,
+        return modelformset_factory(self.model,
+            self.get_changelist_form(request), fields=fields, extra=0, **defaults)
