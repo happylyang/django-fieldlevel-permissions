@@ -25,7 +25,7 @@ class FieldLevelAdmin(admin.ModelAdmin):
                 short_cut = "_".join(".".join(perm.split('.')[1:]).split('_')[1:])
                 # 如果拥有查看全部的
                 if short_cut == "all":
-                    fields = self.model._meta.get_all_field_names()
+                    fields = [field.name for field in filter(lambda f: not f.auto_created, self.model._meta.fields+tuple(self.model._meta.local_many_to_many))]
                     return tuple(fields)
                 else:
                     viewperms += (short_cut,)
